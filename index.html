@@ -527,6 +527,23 @@
             });
         }
 
+        let retryCount = 0;
+        const maxRetries = 15;
+        let retryTimer = null;
+
+        guestVideo.addEventListener('error', () => {
+            if (videoDirectUrl && retryCount < maxRetries) {
+                retryCount++;
+                showToast(`⏳ Preparando seu vídeo na nuvem... Aguarde um instante (${retryCount}/${maxRetries})`);
+                if (retryTimer) clearTimeout(retryTimer);
+                retryTimer = setTimeout(() => {
+                    videoSource.src = videoDirectUrl + (videoDirectUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
+                    guestVideo.load();
+                    guestVideo.play().catch(() => {});
+                }, 2500);
+            }
+        });
+
         // Controle de Áudio
         function toggleAudio() {
             guestVideo.muted = !guestVideo.muted;
