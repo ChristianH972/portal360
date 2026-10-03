@@ -519,16 +519,19 @@
             eventBadge.innerText = eventName.replace(/_/g, ' ').toUpperCase();
         }
 
-        if (videoDirectUrl) {
-            videoSource.src = videoDirectUrl;
+        function loadVideo(url) {
+            guestVideo.src = url;
+            if (videoSource) videoSource.src = url;
             guestVideo.load();
-            guestVideo.play().catch(() => {
-                // Autoplay bloqueado em navegadores com restrições rígidas
-            });
+            guestVideo.play().catch(() => {});
+        }
+
+        if (videoDirectUrl) {
+            loadVideo(videoDirectUrl);
         }
 
         let retryCount = 0;
-        const maxRetries = 15;
+        const maxRetries = 20;
         let retryTimer = null;
 
         guestVideo.addEventListener('error', () => {
@@ -537,10 +540,9 @@
                 showToast(`⏳ Preparando seu vídeo na nuvem... Aguarde um instante (${retryCount}/${maxRetries})`);
                 if (retryTimer) clearTimeout(retryTimer);
                 retryTimer = setTimeout(() => {
-                    videoSource.src = videoDirectUrl + (videoDirectUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
-                    guestVideo.load();
-                    guestVideo.play().catch(() => {});
-                }, 2500);
+                    const cacheBustUrl = videoDirectUrl + (videoDirectUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
+                    loadVideo(cacheBustUrl);
+                }, 2000);
             }
         });
 
@@ -595,8 +597,11 @@
                 }
             } catch (err) {
                 if (err.name !== 'AbortError') {
-                    // Fallback final: força download pelo endpoint
-                    window.location.href = `/download/${encodeURIComponent(eventName)}/${encodeURIComponent(filename)}?raw=1`;
+                    if (videoDirectUrl && (videoDirectUrl.startsWith('http://') || videoDirectUrl.startsWith('https://'))) {
+                        window.location.href = videoDirectUrl;
+                    } else {
+                        window.location.href = `/download/${encodeURIComponent(eventName)}/${encodeURIComponent(filename)}?raw=1`;
+                    }
                 }
             } finally {
                 saveBtnText.innerText = originalText;
