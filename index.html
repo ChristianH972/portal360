@@ -443,11 +443,12 @@
         <!-- Ações do Convidado -->
         <div class="actions-group">
             <button class="btn-primary-download" id="btnSavePhone" onclick="saveVideoToPhone()">
-                <span>📥</span>
+                <span id="saveBtnIcon">📥</span>
                 <span id="saveBtnText">Salvar Vídeo no Celular</span>
             </button>
-
-            
+            <button class="btn-copy-link" id="btnDirectDownload" onclick="downloadDirectFile(event)" style="margin-top: 10px; border-color: rgba(0, 242, 254, 0.4); color: #00f2fe;">
+                <span>⚡</span> <span>Download Direto (Mais Rápido)</span>
+            </button>
         </div>
 
         <!-- Card de Dica Rápida para iPhone / Android -->
@@ -528,6 +529,7 @@
 
         if (videoDirectUrl) {
             loadVideo(videoDirectUrl);
+            startPreloadVideo();
         }
 
         let retryCount = 0;
@@ -546,6 +548,103 @@
             }
         });
 
+        // ==============================================================
+        // PRÉ-CARREGAMENTO E DOWNLOAD ULTRA RÁPIDO
+        // ==============================================================
+        let preloadedBlob = null;
+        let preloadedFile = null;
+        let isPreloading = false;
+        let preloadProgress = 0;
+        let isUserWaitingSave = false;
+
+        function getDirectAttachmentUrl() {
+            if (!videoDirectUrl) return '#';
+            if (videoDirectUrl.includes('res.cloudinary.com') && videoDirectUrl.includes('/upload/')) {
+                const cleanBase = (filename || 'Giro360').replace(/\.mp4$/i, '');
+                return videoDirectUrl.replace('/upload/', `/upload/fl_attachment:${encodeURIComponent(cleanBase)}/`);
+            }
+            return videoDirectUrl;
+        }
+
+        function downloadDirectFile(e) {
+            if (e) e.preventDefault();
+            const url = getDirectAttachmentUrl();
+            if (url && url !== '#') {
+                showToast('🚀 Iniciando download direto do vídeo...');
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename || 'Giro360.mp4';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            }
+        }
+
+        function startPreloadVideo() {
+            if (!videoDirectUrl || isPreloading || preloadedBlob) return;
+            isPreloading = true;
+
+            fetch(videoDirectUrl)
+                .then(response => {
+                    if (!response.ok) throw new Error('HTTP ' + response.status);
+                    const contentLength = response.headers.get('content-length');
+                    const total = contentLength ? parseInt(contentLength, 10) : 0;
+                    let loaded = 0;
+
+                    const reader = response.body ? response.body.getReader() : null;
+                    if (!reader) {
+                        return response.blob();
+                    }
+
+                    const stream = new ReadableStream({
+                        start(controller) {
+                            function readNext() {
+                                reader.read().then(({ done, value }) => {
+                                    if (done) {
+                                        controller.close();
+                                        return;
+                                    }
+                                    loaded += value.byteLength;
+                                    if (total > 0) {
+                                        preloadProgress = Math.round((loaded / total) * 100);
+                                        if (isUserWaitingSave) {
+                                            updateSaveBtnStatus(`Baixando (${preloadProgress}%)...`);
+                                        }
+                                    }
+                                    controller.enqueue(value);
+                                    readNext();
+                                }).catch(err => controller.error(err));
+                            }
+                            readNext();
+                        }
+                    });
+
+                    return new Response(stream).blob();
+                })
+                .then(blob => {
+                    if (blob) {
+                        preloadedBlob = blob;
+                        const cleanName = filename || 'Giro360.mp4';
+                        preloadedFile = new File([blob], cleanName, { type: 'video/mp4' });
+                        preloadProgress = 100;
+
+                        if (isUserWaitingSave) {
+                            triggerShareOrDownload();
+                        }
+                    }
+                })
+                .catch(err => {
+                    console.warn('[Preload] Falha no pré-carregamento:', err);
+                    if (isUserWaitingSave) {
+                        downloadDirectFile();
+                        resetSaveBtn();
+                    }
+                })
+                .finally(() => {
+                    isPreloading = false;
+                });
+        }
+
         // Controle de Áudio
         function toggleAudio() {
             guestVideo.muted = !guestVideo.muted;
@@ -558,55 +657,62 @@
             }
         }
 
-        // 1. Salvar Vídeo no Celular (Web Share API nativa com fallback)
+        // 1. Salvar Vídeo no Celular (Instantâneo com Preload / Web Share)
         async function saveVideoToPhone() {
+            if (preloadedFile) {
+                await triggerShareOrDownload();
+                return;
+            }
+
+            isUserWaitingSave = true;
             const btn = document.getElementById('btnSavePhone');
-            const saveBtnText = document.getElementById('saveBtnText');
-            const originalText = saveBtnText.innerText;
+            if (btn) btn.disabled = true;
 
-            saveBtnText.innerText = 'Carregando vídeo...';
-            btn.disabled = true;
+            if (preloadProgress > 0) {
+                updateSaveBtnStatus(`Baixando (${preloadProgress}%)...`);
+            } else {
+                updateSaveBtnStatus('Preparando vídeo... ⚡');
+            }
 
+            if (!isPreloading) {
+                startPreloadVideo();
+            }
+        }
+
+        async function triggerShareOrDownload() {
             try {
-                const response = await fetch(videoDirectUrl);
-                if (!response.ok) throw new Error('Falha ao baixar vídeo do servidor');
-                const blob = await response.blob();
-                const cleanName = filename || 'Giro360.mp4';
-                const file = new File([blob], cleanName, { type: 'video/mp4' });
-
-                // Verifica se o navegador suporta Web Share com arquivos (Safari iOS 15+ e Chrome Android)
-                if (navigator.canShare && navigator.canShare({ files: [file] })) {
-                    saveBtnText.innerText = 'Escolha Salvar Vídeo...';
+                if (preloadedFile && navigator.canShare && navigator.canShare({ files: [preloadedFile] })) {
+                    updateSaveBtnStatus('Escolha "Salvar Vídeo"...');
                     await navigator.share({
-                        files: [file],
+                        files: [preloadedFile],
                         title: 'Meu Vídeo 360',
                         text: 'Confira meu giro na Plataforma 360!'
                     });
                     showToast('Vídeo compartilhado com sucesso!');
                 } else {
-                    // Fallback para download via tag <a>
-                    const blobUrl = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = blobUrl;
-                    a.download = cleanName;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+                    downloadDirectFile();
                     showToast('Download do vídeo iniciado!');
                 }
             } catch (err) {
                 if (err.name !== 'AbortError') {
-                    if (videoDirectUrl && (videoDirectUrl.startsWith('http://') || videoDirectUrl.startsWith('https://'))) {
-                        window.location.href = videoDirectUrl;
-                    } else {
-                        window.location.href = `/download/${encodeURIComponent(eventName)}/${encodeURIComponent(filename)}?raw=1`;
-                    }
+                    downloadDirectFile();
                 }
             } finally {
-                saveBtnText.innerText = originalText;
-                btn.disabled = false;
+                resetSaveBtn();
             }
+        }
+
+        function updateSaveBtnStatus(text) {
+            const saveBtnText = document.getElementById('saveBtnText');
+            if (saveBtnText) saveBtnText.innerText = text;
+        }
+
+        function resetSaveBtn() {
+            isUserWaitingSave = false;
+            const btn = document.getElementById('btnSavePhone');
+            const saveBtnText = document.getElementById('saveBtnText');
+            if (btn) btn.disabled = false;
+            if (saveBtnText) saveBtnText.innerText = 'Salvar Vídeo no Celular';
         }
 
         // 2. Compartilhar no WhatsApp
